@@ -15,40 +15,59 @@ const getQuizzes = asyncHandler(async (req, res) => {
   const skip = (page - 1) * limit;
   const courseId = req.query.courseId;
 
-  const filter = {};
+  let filter = {};
 
   console.log("🔍 courseId received:", courseId);
+  console.log("👤 Logged-in user:", req.user._id.toString());
+  console.log("👤 Is student?", !req.user.isInstructor && !req.user.isAdmin);
 
-  if (courseId) {
-    filter.course = new mongoose.Types.ObjectId(courseId);
+  // For instructors, show only their quizzes
+  if (req.user.isInstructor && !req.user.isAdmin) {
+    filter.instructor = req.user._id;
+    if (courseId && mongoose.Types.ObjectId.isValid(courseId)) {
+      filter.course = new mongoose.Types.ObjectId(courseId);
+    }
   }
-
-  // For students, only show active quizzes from enrolled courses
-  if (!req.user.isInstructor && !req.user.isAdmin) {
-    filter.isActive = true;
-    filter.startDate = { $lte: new Date() };
-    filter.$or = [
-      { endDate: { $gte: new Date() } },
-      { endDate: { $exists: false } }
-    ];
-
-    // ✅ Get enrolled courses with ObjectId conversion
+  // For students, show active quizzes from enrolled courses
+  else if (!req.user.isInstructor && !req.user.isAdmin) {
+    // Get enrolled courses
     const enrolledCourses = await Course.find({
       students: new mongoose.Types.ObjectId(req.user._id)
     }).select('_id');
 
     const enrolledCourseIds = enrolledCourses.map(course => course._id);
-
-    console.log("👤 Logged-in user:", req.user._id.toString());
     console.log("📚 Enrolled course IDs:", enrolledCourseIds.map(id => id.toString()));
-    console.log("👤 Is student?", !req.user.isInstructor && !req.user.isAdmin);
 
-    if (courseId) {
-      const enrolled = enrolledCourseIds.map(id => id.toString()).includes(courseId);
-      console.log("🎯 Is student enrolled in courseId?", enrolled);
+    if (enrolledCourseIds.length === 0) {
+      console.log("🚫 Student is not enrolled in any courses");
+      return res.json({
+        quizzes: [],
+        page,
+        pages: 0,
+        total: 0,
+        hasNextPage: false,
+        hasPrevPage: false
+      });
+    }
 
-      if (!enrolled) {
-        console.log("🚫 Student is not enrolled in the specified course.");
+    // Base filter for students: active quizzes that have started
+    filter.isActive = true;
+    filter.startDate = { $lte: new Date() };
+    
+    // Only include quizzes that haven't ended (or have no end date)
+    filter.$or = [
+      { endDate: { $gte: new Date() } },
+      { endDate: { $exists: false } },
+      { endDate: null }
+    ];
+
+    if (courseId && mongoose.Types.ObjectId.isValid(courseId)) {
+      // Check if student is enrolled in the specific course
+      const isEnrolledInCourse = enrolledCourseIds.some(id => id.toString() === courseId);
+      console.log("🎯 Is student enrolled in courseId?", isEnrolledInCourse);
+
+      if (!isEnrolledInCourse) {
+        console.log("🚫 Student is not enrolled in the specified course");
         return res.json({
           quizzes: [],
           page,
@@ -58,19 +77,24 @@ const getQuizzes = asyncHandler(async (req, res) => {
           hasPrevPage: false
         });
       }
+      filter.course = new mongoose.Types.ObjectId(courseId);
     } else {
-      // Only show quizzes from enrolled courses
+      // Show quizzes from all enrolled courses
       filter.course = { $in: enrolledCourseIds };
     }
   }
-
-  // For instructors, show only their quizzes
-  if (req.user.isInstructor && !req.user.isAdmin) {
-    filter.instructor = req.user._id;
+  // For admins, show all quizzes
+  else {
+    if (courseId && mongoose.Types.ObjectId.isValid(courseId)) {
+      filter.course = new mongoose.Types.ObjectId(courseId);
+    }
   }
+
+  console.log("🔍 Final filter:", JSON.stringify(filter, null, 2));
 
   // Get total count first
   const total = await Quiz.countDocuments(filter);
+  console.log("📊 Total quizzes found:", total);
 
   // Fetch quizzes
   const quizzesRaw = await Quiz.find(filter)
@@ -79,6 +103,8 @@ const getQuizzes = asyncHandler(async (req, res) => {
     .limit(limit)
     .populate('course', 'title')
     .populate('instructor', 'name email');
+
+  console.log("📋 Raw quizzes count:", quizzesRaw.length);
 
   // Transform quizzes to match frontend expectations and add attempt info
   const quizzes = await Promise.all(quizzesRaw.map(async quiz => {
@@ -127,6 +153,8 @@ const getQuizzes = asyncHandler(async (req, res) => {
     };
   }));
 
+  console.log("✅ Transformed quizzes count:", quizzes.length);
+
   res.json({
     quizzes,
     page,
@@ -136,7 +164,6 @@ const getQuizzes = asyncHandler(async (req, res) => {
     hasPrevPage: page > 1,
   });
 });
-
 
 /**
  * Get quiz by ID
