@@ -50,17 +50,7 @@ const getQuizzes = asyncHandler(async (req, res) => {
       });
     }
 
-    // Base filter for students: active quizzes that have started
-    filter.isActive = true;
-    filter.startDate = { $lte: new Date() };
-    
-    // Only include quizzes that haven't ended (or have no end date)
-    filter.$or = [
-      { endDate: { $gte: new Date() } },
-      { endDate: { $exists: false } },
-      { endDate: null }
-    ];
-
+    // Only filter by course(s) for students
     if (courseId && mongoose.Types.ObjectId.isValid(courseId)) {
       // Check if student is enrolled in the specific course
       const isEnrolledInCourse = enrolledCourseIds.some(id => id.toString() === courseId);
@@ -646,5 +636,3 @@ module.exports = {
   getQuizResults,
   mockQuizAttempt,
 };
-
-
